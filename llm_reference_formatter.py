@@ -1,34 +1,59 @@
 """
 llm_reference_formatter.py
 
-Use Claude to identify and format references in a markdown document.
+Use an LLM to identify and format references in a markdown document.
+
+Supports multiple LLM backends:
+- Any OpenAI-compatible API (OpenAI, ollama, vLLM, LM Studio, Azure, Together, Groq)
+- Anthropic API
+- Any CLI tool (claude, ollama run, llm, etc.) — no API key needed
 
 This script takes markdown text with informal citations (e.g., "Banwell et al., 2023"
 or "(Smith 2020)") and:
-1. Uses Claude to identify all citations and extract metadata
+1. Uses an LLM to identify all citations and extract metadata
 2. Searches CrossRef for full bibliographic metadata
 3. Optionally adds missing items to your Zotero library via the Web API
 4. Outputs pandoc-ready markdown with [@citekey] markers
 5. Generates references.json (CSL JSON) and keymap.json for zotero_field_insert.py
 
 Usage:
+    # OpenAI API
+    export OPENAI_API_KEY=sk-...
     python llm_reference_formatter.py input.md -o output.md
-    python llm_reference_formatter.py input.md -o output.md --zotero-api-key YOUR_KEY --zotero-library-id 1793208
+
+    # Anthropic API
+    export ANTHROPIC_API_KEY=sk-ant-...
+    python llm_reference_formatter.py input.md -o output.md --provider anthropic
+
+    # CLI tool (no API key needed — uses claude, ollama, or any command)
+    python llm_reference_formatter.py input.md -o output.md --provider cli
+    python llm_reference_formatter.py input.md -o output.md --provider cli --cli-command "ollama run llama3"
+
+    # Local model via OpenAI-compatible API
+    python llm_reference_formatter.py input.md -o output.md \
+        --api-base http://localhost:11434/v1 --model llama3
+
+    # Any OpenAI-compatible API
+    export OPENAI_API_KEY=your-key
+    python llm_reference_formatter.py input.md -o output.md \
+        --api-base https://api.together.xyz/v1 --model meta-llama/Llama-3-70b
 
 Requirements:
-    pip install anthropic requests
+    pip install requests
 """
 
 import argparse
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
-import anthropic
 import requests
 
 CROSSREF_API = "https://api.crossref.org/works"
@@ -101,6 +126,130 @@ Document:
 """
 
 
+# ---------------------------------------------------------------------------
+# LLM backends
+# ---------------------------------------------------------------------------
+
+def llm_call(prompt, provider, model, api_base=None, api_key=None, max_tokens=8192,
+             cli_command=None):
+    """Call an LLM. Supports 'openai', 'anthropic', and 'cli' providers."""
+    if provider == "anthropic":
+        return _call_anthropic(prompt, model, api_key, max_tokens)
+    elif provider == "openai":
+        return _call_openai(prompt, model, api_base, api_key, max_tokens)
+    elif provider == "cli":
+        return _call_cli(prompt, cli_command)
+    else:
+        print(f"Error: unknown provider '{provider}'. Use 'openai', 'anthropic', or 'cli'.")
+        sys.exit(1)
+
+
+def _call_openai(prompt, model, api_base=None, api_key=None, max_tokens=8192):
+    """Call any OpenAI-compatible API using requests (no SDK dependency)."""
+    base = (api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")).rstrip("/")
+    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0,
+    }
+
+    resp = requests.post(f"{base}/chat/completions", headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def _call_anthropic(prompt, model, api_key=None, max_tokens=8192):
+    """Call the Anthropic API using requests (no SDK dependency)."""
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        print("Error: ANTHROPIC_API_KEY not set")
+        sys.exit(1)
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+    }
+
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    resp = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["content"][0]["text"].strip()
+
+
+def _call_cli(prompt, cli_command=None):
+    """Call an LLM via a CLI tool. No API key needed.
+
+    Auto-detects available tools: claude, ollama, llm.
+    Or use a custom command via --cli-command.
+
+    The prompt is passed via stdin (piped) to the command.
+    """
+    if cli_command:
+        cmd = cli_command
+    else:
+        # Auto-detect available CLI tools
+        if shutil.which("claude"):
+            cmd = "claude --print"
+        elif shutil.which("ollama"):
+            cmd = "ollama run llama3"
+        elif shutil.which("llm"):
+            cmd = "llm"
+        else:
+            print("Error: no LLM CLI tool found. Install claude, ollama, or llm,")
+            print("  or specify --cli-command 'your-command'")
+            sys.exit(1)
+
+    print(f"  Using CLI: {cmd}")
+
+    # Write prompt to temp file and pipe it
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write(prompt)
+        prompt_file = f.name
+
+    try:
+        # Remove CLAUDECODE env var so claude CLI doesn't refuse to run
+        env = os.environ.copy()
+        env.pop("CLAUDECODE", None)
+
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+        )
+        if result.returncode != 0:
+            print(f"CLI error (exit {result.returncode}): {result.stderr[:500]}")
+            sys.exit(1)
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        print("Error: CLI command timed out after 5 minutes")
+        sys.exit(1)
+    finally:
+        os.unlink(prompt_file)
+
+
+# ---------------------------------------------------------------------------
+# CrossRef
+# ---------------------------------------------------------------------------
+
 def search_crossref(query, author=None, year=None, rows=3):
     """Search CrossRef for a work. Returns list of candidate items."""
     params = {"query": query, "rows": rows, "mailto": CROSSREF_MAILTO}
@@ -126,7 +275,6 @@ def crossref_to_csl(item):
     csl["title"] = item.get("title", [""])[0] if isinstance(item.get("title"), list) else item.get("title", "")
     csl["DOI"] = item.get("DOI", "")
 
-    # Authors
     authors = []
     for a in item.get("author", []):
         author = {}
@@ -139,12 +287,10 @@ def crossref_to_csl(item):
     if authors:
         csl["author"] = authors
 
-    # Container
     ct = item.get("container-title", [])
     if ct:
         csl["container-title"] = ct[0] if isinstance(ct, list) else ct
 
-    # Volume, issue, page
     if item.get("volume"):
         csl["volume"] = item["volume"]
     if item.get("issue"):
@@ -152,13 +298,11 @@ def crossref_to_csl(item):
     if item.get("page"):
         csl["page"] = item["page"]
 
-    # Date
     issued = item.get("issued", {})
     date_parts = issued.get("date-parts", [[]])
     if date_parts and date_parts[0]:
         csl["issued"] = {"date-parts": [date_parts[0]]}
 
-    # ISSN
     issn = item.get("ISSN", [])
     if issn:
         csl["ISSN"] = issn[0] if isinstance(issn, list) else issn
@@ -170,7 +314,6 @@ def score_crossref_match(item, author=None, year=None, title_hint=None):
     """Score how well a CrossRef result matches our search criteria."""
     score = 0
 
-    # Author match
     if author and item.get("author"):
         first_author = item["author"][0].get("family", "").lower()
         if first_author == author.lower():
@@ -178,13 +321,11 @@ def score_crossref_match(item, author=None, year=None, title_hint=None):
         elif author.lower() in first_author:
             score += 1
 
-    # Year match
     issued = item.get("issued", {}).get("date-parts", [[]])
     if issued and issued[0] and year:
         if str(issued[0][0]) == str(year):
             score += 3
 
-    # Title similarity (simple substring check)
     if title_hint:
         item_title = (item.get("title", [""])[0] if isinstance(item.get("title"), list)
                       else item.get("title", "")).lower()
@@ -192,7 +333,6 @@ def score_crossref_match(item, author=None, year=None, title_hint=None):
         matches = sum(1 for w in hint_words if w in item_title)
         score += min(matches, 3)
 
-    # CrossRef score
     cr_score = item.get("score", 0)
     if cr_score > 100:
         score += 2
@@ -209,7 +349,6 @@ def find_best_crossref_match(citation):
     title = citation.get("title_hint") or citation.get("title", "")
     journal = citation.get("journal_hint") or citation.get("journal", "")
 
-    # Try different search strategies
     queries = []
     if title and len(title) > 10:
         queries.append(title)
@@ -221,7 +360,7 @@ def find_best_crossref_match(citation):
     best_item = None
     best_score = -1
 
-    for query in queries[:2]:  # limit to avoid rate limiting
+    for query in queries[:2]:
         items = search_crossref(query, author=author, year=year)
         for item in items:
             s = score_crossref_match(item, author, year, title)
@@ -234,6 +373,10 @@ def find_best_crossref_match(citation):
         return best_item, best_score
     return None, best_score
 
+
+# ---------------------------------------------------------------------------
+# Zotero
+# ---------------------------------------------------------------------------
 
 def search_zotero_library(api_key, library_id, query, library_type="user"):
     """Search a Zotero library for an item."""
@@ -251,7 +394,6 @@ def search_zotero_library(api_key, library_id, query, library_type="user"):
 
 def add_to_zotero(api_key, library_id, csl_item, library_type="user"):
     """Add an item to a Zotero library via the Web API. Returns the item key."""
-    # Map CSL type to Zotero type
     type_map = {
         "article-journal": "journalArticle",
         "book": "book",
@@ -262,7 +404,6 @@ def add_to_zotero(api_key, library_id, csl_item, library_type="user"):
     }
     zot_type = type_map.get(csl_item.get("type", ""), "journalArticle")
 
-    # Build Zotero item
     zot_item = {"itemType": zot_type}
 
     if csl_item.get("title"):
@@ -281,7 +422,6 @@ def add_to_zotero(api_key, library_id, csl_item, library_type="user"):
         parts = csl_item["issued"]["date-parts"][0]
         zot_item["date"] = "-".join(str(p) for p in parts)
 
-    # Creators
     creators = []
     for a in csl_item.get("author", []):
         creators.append({
@@ -303,7 +443,6 @@ def add_to_zotero(api_key, library_id, csl_item, library_type="user"):
         resp = requests.post(url, headers=headers, json=[zot_item], timeout=15)
         resp.raise_for_status()
         result = resp.json()
-        # The response has a "successful" dict with index -> item
         if result.get("successful"):
             new_item = list(result["successful"].values())[0]
             return new_item.get("key")
@@ -349,9 +488,19 @@ def lookup_zotero_key_local(zotero_db, title=None, doi=None):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+PROVIDER_DEFAULTS = {
+    "openai": "gpt-4o",
+    "anthropic": "claude-sonnet-4-20250514",
+}
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Use Claude to identify and format references in a markdown document"
+        description="Use an LLM to identify and format references in a markdown document"
     )
     parser.add_argument("input", help="Input markdown file with informal citations")
     parser.add_argument("--output", "-o", help="Output markdown file with [@citekey] markers")
@@ -359,11 +508,17 @@ def main():
                         help="Output CSL JSON bibliography (default: references.json)")
     parser.add_argument("--keymap-output", default="keymap.json",
                         help="Output keymap for zotero_field_insert (default: keymap.json)")
+    parser.add_argument("--provider", "-p", default="openai",
+                        choices=["openai", "anthropic", "cli"],
+                        help="LLM provider (default: openai). 'openai' works with any OpenAI-compatible API. "
+                             "'cli' uses a local CLI tool (claude, ollama, llm) — no API key needed.")
+    parser.add_argument("--model", "-m", help="Model name (default depends on provider)")
+    parser.add_argument("--api-base", help="API base URL (for local/custom endpoints, e.g., http://localhost:11434/v1)")
+    parser.add_argument("--api-key", help="API key (overrides env var)")
+    parser.add_argument("--cli-command", help="Custom CLI command for --provider cli (e.g., 'ollama run llama3')")
     parser.add_argument("--zotero-api-key", help="Zotero Web API key (for adding items)")
     parser.add_argument("--zotero-library-id", help="Zotero library ID")
     parser.add_argument("--zotero-db", help="Path to local zotero.sqlite (for key lookups)")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
-                        help="Claude model to use (default: claude-sonnet-4-20250514)")
     parser.add_argument("--no-crossref", action="store_true",
                         help="Skip CrossRef lookups (use LLM-extracted metadata only)")
     parser.add_argument("--dry-run", action="store_true",
@@ -378,23 +533,25 @@ def main():
     text = input_path.read_text()
 
     output_path = args.output or str(input_path.with_suffix("")) + "_cited.md"
+    model = args.model or PROVIDER_DEFAULTS.get(args.provider, "gpt-4o")
 
-    # Check API key
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY environment variable not set")
-        sys.exit(1)
+    print(f"Provider: {args.provider}" + (f" | Model: {model}" if args.provider != "cli" else ""))
+    if args.api_base:
+        print(f"API base: {args.api_base}")
+    if args.cli_command:
+        print(f"CLI command: {args.cli_command}")
 
-    client = anthropic.Anthropic()
-
-    # Step 1: Extract citations with Claude
-    print("Step 1: Extracting citations with Claude...")
-    response = client.messages.create(
-        model=args.model,
+    # Step 1: Extract citations with LLM
+    print("\nStep 1: Extracting citations...")
+    raw = llm_call(
+        CITATION_EXTRACTION_PROMPT + text,
+        provider=args.provider,
+        model=model,
+        api_base=args.api_base,
+        api_key=args.api_key,
         max_tokens=4096,
-        messages=[{"role": "user", "content": CITATION_EXTRACTION_PROMPT + text}],
+        cli_command=args.cli_command,
     )
-    raw = response.content[0].text.strip()
 
     # Parse JSON (handle potential markdown code blocks)
     if raw.startswith("```"):
@@ -403,7 +560,7 @@ def main():
     try:
         extracted = json.loads(raw)
     except json.JSONDecodeError as e:
-        print(f"Error parsing Claude response: {e}")
+        print(f"Error parsing LLM response: {e}")
         print("Raw response:", raw[:500])
         sys.exit(1)
 
@@ -422,7 +579,6 @@ def main():
         if key and key not in all_refs:
             all_refs[key] = cit
         elif key and key in all_refs:
-            # Merge hints from inline citation into reference list entry
             existing = all_refs[key]
             if not existing.get("title_hint") and cit.get("title_hint"):
                 existing["title_hint"] = cit["title_hint"]
@@ -464,7 +620,6 @@ def main():
             print("skipping CrossRef")
 
         if csl is None:
-            # Build minimal CSL from extracted metadata
             csl = {
                 "id": key,
                 "type": "article-journal",
@@ -484,7 +639,7 @@ def main():
                 csl["DOI"] = ref["doi"]
 
         bib_items.append(csl)
-        keymap[key] = zotero_key  # None if not in Zotero
+        keymap[key] = zotero_key
 
         # Add to Zotero if requested and not already there
         if not zotero_key and args.zotero_api_key and args.zotero_library_id:
@@ -503,17 +658,20 @@ def main():
         if orig:
             mappings.append(f'"{orig}" -> [@{key}]')
 
-    # Step 3: Rewrite document with Claude
+    # Step 3: Rewrite document with LLM
     print(f"\nStep 3: Rewriting document with [@citekey] markers...")
     mapping_text = "\n".join(mappings)
     rewrite_prompt = REWRITE_PROMPT.replace("{mappings}", mapping_text)
 
-    response = client.messages.create(
-        model=args.model,
+    rewritten = llm_call(
+        rewrite_prompt + text,
+        provider=args.provider,
+        model=model,
+        api_base=args.api_base,
+        api_key=args.api_key,
         max_tokens=8192,
-        messages=[{"role": "user", "content": rewrite_prompt + text}],
+        cli_command=args.cli_command,
     )
-    rewritten = response.content[0].text.strip()
 
     # Remove any markdown code blocks wrapping
     if rewritten.startswith("```"):
@@ -532,17 +690,14 @@ def main():
     # Step 4: Write outputs
     print(f"\nStep 4: Writing outputs...")
 
-    # Bibliography
     with open(args.bib_output, "w") as f:
         json.dump(bib_items, f, indent=2)
     print(f"  {args.bib_output}: {len(bib_items)} items")
 
-    # Keymap
     with open(args.keymap_output, "w") as f:
         json.dump(keymap, f, indent=2)
     print(f"  {args.keymap_output}: {len(keymap)} entries")
 
-    # Rewritten markdown
     with open(output_path, "w") as f:
         f.write(rewritten)
     print(f"  {output_path}: rewritten with [@citekey] markers")
