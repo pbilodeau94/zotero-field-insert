@@ -1,0 +1,230 @@
+[
+  {
+    "type": "book-chapter",
+    "title": "Character",
+    "DOI": "10.1006/rwgn.2001.0183",
+    "author": [
+      {
+        "family": "Fitch",
+        "given": "W."
+      }
+    ],
+    "container-title": "Encyclopedia of Genetics",
+    "page": "325",
+    "issued": {
+      "date-parts": [
+        [
+          2001
+        ]
+      ]
+    },
+    "id": "fitch2001"
+  },
+  {
+    "type": "article-journal",
+    "title": "Preparing, conducting, and analyzing Delphi surveys: Cross-disciplinary practices, new directions, and advancements",
+    "DOI": "10.1016/j.mex.2021.101401",
+    "author": [
+      {
+        "family": "Beiderbeck",
+        "given": "Daniel"
+      },
+      {
+        "family": "Frevel",
+        "given": "Nicolas"
+      },
+      {
+        "family": "von der Gracht",
+        "given": "Heiko A."
+      },
+      {
+        "family": "Schmidt",
+        "given": "Sascha L."
+      },
+      {
+        "family": "Schweitzer",
+        "given": "Vera M."
+      }
+    ],
+    "container-title": "MethodsX",
+    "volume": "8",
+    "page": "101401",
+    "issued": {
+      "date-parts": [
+        [
+          2021
+        ]
+      ]
+    },
+    "ISSN": "2215-0161",
+    "id": "beiderbeck2021"
+  },
+  {
+    "type": "article-journal",
+    "title": "Observer bias in randomised clinical trials with binary outcomes: systematic review of trials with both blinded and non-blinded outcome assessors",
+    "DOI": "10.1136/bmj.e1119",
+    "author": [
+      {
+        "family": "Hrobjartsson",
+        "given": "A."
+      },
+      {
+        "family": "Thomsen",
+        "given": "A. S. S."
+      },
+      {
+        "family": "Emanuelsson",
+        "given": "F."
+      },
+      {
+        "family": "Tendal",
+        "given": "B."
+      },
+      {
+        "family": "Hilden",
+        "given": "J."
+      },
+      {
+        "family": "Boutron",
+        "given": "I."
+      },
+      {
+        "family": "Ravaud",
+        "given": "P."
+      },
+      {
+        "family": "Brorson",
+        "given": "S."
+      }
+    ],
+    "container-title": "BMJ",
+    "volume": "344",
+    "issue": "feb27 2",
+    "page": "e1119-e1119",
+    "issued": {
+      "date-parts": [
+        [
+          2012,
+          2,
+          27
+        ]
+      ]
+    },
+    "ISSN": "0959-8138",
+    "id": "hrobjartsson2013"
+  },
+  {
+    "type": "article-journal",
+    "title": "Adverse events associated with unblinded, but not with blinded, statin therapy in the Anglo-Scandinavian Cardiac Outcomes Trial\u2014Lipid-Lowering Arm (ASCOT-LLA): a randomised double-blind placebo-controlled trial and its non-randomised non-blind extension phase",
+    "DOI": "10.1016/s0140-6736(17)31075-9",
+    "author": [
+      {
+        "family": "Gupta",
+        "given": "Ajay"
+      },
+      {
+        "family": "Thompson",
+        "given": "David"
+      },
+      {
+        "family": "Whitehouse",
+        "given": "Andrew"
+      },
+      {
+        "family": "Collier",
+        "given": "Tim"
+      },
+      {
+        "family": "Dahlof",
+        "given": "Bjorn"
+      },
+      {
+        "family": "Poulter",
+        "given": "Neil"
+      },
+      {
+        "family": "Collins",
+        "given": "Rory"
+      },
+      {
+        "family": "Sever",
+        "given": "Peter"
+      }
+    ],
+    "container-title": "The Lancet",
+    "volume": "389",
+    "issue": "10088",
+    "page": "2473-2481",
+    "issued": {
+      "date-parts": [
+        [
+          2017,
+          6
+        ]
+      ]
+    },
+    "ISSN": "0140-6736",
+    "id": "gupta2017"
+  },
+  {
+    "type": "article-journal",
+    "title": "Mechanisms Involved in Placebo and Nocebo Responses and Implications for Drug Trials",
+    "DOI": "10.1038/clpt.2011.204",
+    "author": [
+      {
+        "family": "Rief",
+        "given": "W"
+      },
+      {
+        "family": "Bingel",
+        "given": "U"
+      },
+      {
+        "family": "Schedlowski",
+        "given": "M"
+      },
+      {
+        "family": "Enck",
+        "given": "P"
+      }
+    ],
+    "container-title": "Clinical Pharmacology &amp; Therapeutics",
+    "volume": "90",
+    "issue": "5",
+    "page": "722-726",
+    "issued": {
+      "date-parts": [
+        [
+          2011,
+          10,
+          5
+        ]
+      ]
+    },
+    "ISSN": "0009-9236",
+    "id": "rief2019"
+  },
+  {
+    "type": "article-journal",
+    "title": "The influence of the nocebo effect in clinical trials",
+    "DOI": "10.2147/oajct.s33730",
+    "author": [
+      {
+        "family": "Colloca",
+        "given": "Luana"
+      }
+    ],
+    "container-title": "Open Access Journal of Clinical Trials",
+    "page": "61",
+    "issued": {
+      "date-parts": [
+        [
+          2012,
+          11
+        ]
+      ]
+    },
+    "ISSN": "1179-1519",
+    "id": "colloca2024"
+  }
+]

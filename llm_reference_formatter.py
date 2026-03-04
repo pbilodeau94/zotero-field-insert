@@ -66,10 +66,18 @@ and identify every citation or reference to a published work.
 
 For each citation found, extract:
 1. The text as it appears in the document (e.g., "Banwell et al., 2023" or "(Smith 2020)")
-2. Your best guess at: first author last name, year, title (if mentioned), journal (if mentioned)
-3. A suggested citation key in the format: firstauthorlastnameYEAR (lowercase, no spaces)
+2. First author last name, year
+3. **CRITICAL: Infer the likely title or topic of the cited work from the surrounding \
+context.** For example, if the text says "The RAND/UCLA Appropriateness Method recommends \
+a panel of 9 members (Fitch et al. 2001)", the title_hint should be "RAND UCLA \
+appropriateness method manual". If it says "nonblinded assessors exaggerate effect sizes \
+(Hrobjartsson et al. 2013)", the title_hint should be about observer bias in clinical \
+trials. Be specific — this is the primary field used for CrossRef search.
+4. Any journal name mentioned or inferable from context
+5. A suggested citation key in the format: firstauthorlastnameYEAR (lowercase, no spaces)
 
-Also identify any numbered reference list at the end of the document and extract metadata from those entries.
+Also identify any numbered reference list at the end of the document and extract metadata \
+from those entries.
 
 Return a JSON object with this structure:
 {
@@ -79,7 +87,7 @@ Return a JSON object with this structure:
       "context": "the sentence or phrase where this citation appears",
       "first_author": "Banwell",
       "year": "2023",
-      "title_hint": "any title text you can infer",
+      "title_hint": "inferred title or topic keywords (be specific for CrossRef search)",
       "journal_hint": "any journal you can infer",
       "suggested_key": "banwell2023"
     }
@@ -342,16 +350,80 @@ def score_crossref_match(item, author=None, year=None, title_hint=None):
     return score
 
 
+def search_pubmed(query, author=None, year=None, max_results=3):
+    """Search PubMed for a work. Returns list of DOIs found."""
+    # Build PubMed search query
+    terms = []
+    if author:
+        terms.append(f"{author}[Author]")
+    if year:
+        terms.append(f"{year}[Date - Publication]")
+    if query:
+        terms.append(query)
+    search_term = " AND ".join(terms) if terms else query
+
+    try:
+        # ESearch
+        params = {
+            "db": "pubmed",
+            "term": search_term,
+            "retmax": max_results,
+            "retmode": "json",
+        }
+        resp = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                            params=params, timeout=15)
+        resp.raise_for_status()
+        ids = resp.json().get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            return []
+
+        # ESummary to get DOIs
+        params = {
+            "db": "pubmed",
+            "id": ",".join(ids),
+            "retmode": "json",
+        }
+        resp = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+                            params=params, timeout=15)
+        resp.raise_for_status()
+        result = resp.json().get("result", {})
+
+        dois = []
+        for pmid in ids:
+            article = result.get(pmid, {})
+            for aid in article.get("articleids", []):
+                if aid.get("idtype") == "doi":
+                    dois.append(aid["value"])
+                    break
+        return dois
+    except Exception as e:
+        print(f"  PubMed search failed: {e}")
+        return []
+
+
+def crossref_by_doi(doi):
+    """Fetch a specific work from CrossRef by DOI."""
+    try:
+        resp = requests.get(f"{CROSSREF_API}/{doi}", params={"mailto": CROSSREF_MAILTO}, timeout=15)
+        resp.raise_for_status()
+        return resp.json().get("message", {})
+    except Exception:
+        return None
+
+
 def find_best_crossref_match(citation):
-    """Find the best CrossRef match for a citation."""
+    """Find the best CrossRef match for a citation. Falls back to PubMed if needed."""
     author = citation.get("first_author", "")
     year = citation.get("year", "")
     title = citation.get("title_hint") or citation.get("title", "")
     journal = citation.get("journal_hint") or citation.get("journal", "")
 
+    # Strategy 1: Search CrossRef with title hint (most specific)
     queries = []
     if title and len(title) > 10:
         queries.append(title)
+    if author and title and len(title) > 5:
+        queries.append(f"{author} {title}")
     if author and year:
         queries.append(f"{author} {year}")
     if author and journal:
@@ -360,14 +432,29 @@ def find_best_crossref_match(citation):
     best_item = None
     best_score = -1
 
-    for query in queries[:2]:
-        items = search_crossref(query, author=author, year=year)
+    for query in queries[:3]:
+        items = search_crossref(query, author=author, year=year, rows=5)
         for item in items:
             s = score_crossref_match(item, author, year, title)
             if s > best_score:
                 best_score = s
                 best_item = item
+        if best_score >= 6:
+            break  # good enough match, stop searching
         time.sleep(0.5)  # polite rate limiting
+
+    # Strategy 2: PubMed fallback if CrossRef match is weak
+    if best_score < 5 and (author or title):
+        pubmed_query = title if title and len(title) > 10 else f"{author} {year}"
+        dois = search_pubmed(pubmed_query, author=author, year=year)
+        for doi in dois:
+            item = crossref_by_doi(doi)
+            if item:
+                s = score_crossref_match(item, author, year, title)
+                if s > best_score:
+                    best_score = s
+                    best_item = item
+        time.sleep(0.5)
 
     if best_score >= 4:
         return best_item, best_score
